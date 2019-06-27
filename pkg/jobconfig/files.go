@@ -208,39 +208,35 @@ func WriteToDir(jobDir, org, repo string, jobConfig *prowconfig.JobConfig) error
 	allJobs := sets.String{}
 	files := map[string]*prowconfig.JobConfig{}
 	key := fmt.Sprintf("%s/%s", org, repo)
-	for _, job := range jobConfig.Presubmits[key] {
-		allJobs.Insert(job.Name)
+
+	processJob := func(name string, branches []string) (pre, post string) {
+		allJobs.Insert(name)
 		branch := "master"
-		if len(job.Branches) > 0 {
-			branch = job.Branches[0]
+		if len(branches) > 0 {
+			branch = branches[0]
 			// branches may be regexps, strip regexp characters and trailing dashes / slashes
 			branch = MakeRegexFilenameLabel(branch)
 		}
-		file := fmt.Sprintf("%s-%s-%s-presubmits.yaml", org, repo, branch)
-		if _, ok := files[file]; ok {
-			files[file].Presubmits[key] = append(files[file].Presubmits[key], job)
-		} else {
-			files[file] = &prowconfig.JobConfig{Presubmits: map[string][]prowconfig.Presubmit{
-				key: {job},
-			}}
+		preFile := fmt.Sprintf("%s-%s-%s-presubmits.yaml", org, repo, branch)
+		postFile := fmt.Sprintf("%s-%s-%s-postsubmits.yaml", org, repo, branch)
+		if _, ok := files[preFile]; !ok {
+			files[preFile] = &prowconfig.JobConfig{Presubmits: map[string][]prowconfig.Presubmit{}}
 		}
+		if _, ok := files[postFile]; !ok {
+			files[postFile] = &prowconfig.JobConfig{Postsubmits: map[string][]prowconfig.Postsubmit{}}
+		}
+
+		return preFile, postFile
 	}
+
+	for _, job := range jobConfig.Presubmits[key] {
+		preFile, _ := processJob(job.Name, job.Branches)
+		files[preFile].Presubmits[key] = append(files[preFile].Presubmits[key], job)
+	}
+
 	for _, job := range jobConfig.Postsubmits[key] {
-		allJobs.Insert(job.Name)
-		branch := "master"
-		if len(job.Branches) > 0 {
-			branch = job.Branches[0]
-			// branches may be regexps, strip regexp characters and trailing dashes / slashes
-			branch = MakeRegexFilenameLabel(branch)
-		}
-		file := fmt.Sprintf("%s-%s-%s-postsubmits.yaml", org, repo, branch)
-		if _, ok := files[file]; ok {
-			files[file].Postsubmits[key] = append(files[file].Postsubmits[key], job)
-		} else {
-			files[file] = &prowconfig.JobConfig{Postsubmits: map[string][]prowconfig.Postsubmit{
-				key: {job},
-			}}
-		}
+		_, postFile := processJob(job.Name, job.Branches)
+		files[postFile].Postsubmits[key] = append(files[postFile].Postsubmits[key], job)
 	}
 
 	jobDirForComponent := filepath.Join(jobDir, org, repo)
@@ -283,6 +279,9 @@ func pruneStaleGeneratedJobs(jobConfig *prowconfig.JobConfig, staleLabel string)
 			}
 		}
 		jobConfig.Presubmits[repo] = jobs[:i]
+		if len(jobConfig.Presubmits[repo]) == 0 {
+			delete(jobConfig.Presubmits, repo)
+		}
 	}
 	for repo, jobs := range jobConfig.Postsubmits {
 		i := 0
@@ -293,6 +292,9 @@ func pruneStaleGeneratedJobs(jobConfig *prowconfig.JobConfig, staleLabel string)
 			}
 		}
 		jobConfig.Postsubmits[repo] = jobs[:i]
+		if len(jobConfig.Postsubmits[repo]) == 0 {
+			delete(jobConfig.Postsubmits, repo)
+		}
 	}
 }
 
@@ -320,6 +322,13 @@ func mergeJobsIntoFile(prowConfigPath string, jobConfig *prowconfig.JobConfig, a
 	pruneStaleGeneratedJobs(existingJobConfig, GeneratedStale)
 
 	sortConfigFields(existingJobConfig)
+
+	if len(existingJobConfig.Presubmits)+len(existingJobConfig.Postsubmits) == 0 {
+		if err := os.Remove(prowConfigPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
 
 	return writeToFile(prowConfigPath, existingJobConfig)
 }
