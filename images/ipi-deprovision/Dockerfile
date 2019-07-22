@@ -1,7 +1,7 @@
 FROM registry.svc.ci.openshift.org/openshift/hive-v4.0:hive
 LABEL maintainer="hongkliu@redhat.com"
 
-COPY ipi-deprovision/ipi-deprovision.sh  /usr/bin/ipi-deprovision.sh
+COPY cmd/ipi-deprovision/ipi-deprovision.sh  /usr/bin/ipi-deprovision.sh
 
 # Install awscli
 RUN chmod +x /usr/bin/ipi-deprovision.sh && \
