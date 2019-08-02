@@ -1,7 +1,10 @@
-approvers:
-- bbguimaraes
-- droslean
-- hongkailiu
-- petr-muller
-- smarterclayton
-- stevekuznetsov
+filters:
+  ".*":
+    approvers:
+      - petr-muller
+  "^upstream-community-operators/*":
+    labels:
+      - kubernetes-operator
+  "^community-operators/*":
+    labels:
+      - openshift-operator 
