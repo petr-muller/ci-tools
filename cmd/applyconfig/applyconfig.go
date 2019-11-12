@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"github.com/openshift/ci-tools/pkg/util"
 	"io"
 	"os"
 	"os/exec"
@@ -259,30 +260,13 @@ func applyConfig(rootDir, cfgType string, process processFn) error {
 	return nil
 }
 
-type secretGetter struct {
-	sync.RWMutex
-	secrets sets.String
-}
-
-func (g *secretGetter) addSecrets(newSecrets ...string) {
-	g.Lock()
-	defer g.Unlock()
-	g.secrets.Insert(newSecrets...)
-}
-
-func (g *secretGetter) getSecrets() sets.String {
-	g.RLock()
-	defer g.RUnlock()
-	return g.secrets
-}
-
 var (
-	secrets *secretGetter
+	secrets *util.SecretGetter
 )
 
 func init() {
-	secrets = &secretGetter{secrets: sets.NewString()}
-	logrus.SetFormatter(logrusutil.NewCensoringFormatter(logrus.StandardLogger().Formatter, secrets.getSecrets))
+	secrets = util.NewSecretGetter()
+	logrus.SetFormatter(logrusutil.NewCensoringFormatter(logrus.StandardLogger().Formatter, secrets.GetSecrets))
 }
 
 func main() {
