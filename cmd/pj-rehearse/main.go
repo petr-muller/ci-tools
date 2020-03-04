@@ -360,8 +360,8 @@ func rehearseMain() int {
 	}
 
 	executor := rehearse.NewExecutor(presubmitsToRehearse, prNumber, o.releaseRepoPath, jobSpec.Refs, o.dryRun, loggers, pjclient)
-	success, err := executor.ExecuteJobs()
-	metrics.Execution = executor.Metrics
+	success, err := executor.Do()
+	metrics.Execution = executor.Metrics()
 	if err != nil {
 		logger.WithError(err).Error("Failed to rehearse jobs")
 		return gracefulExit(o.noFail, rehearseFailureOutput)

@@ -2,6 +2,7 @@ package rehearse
 
 import (
 	"fmt"
+	"github.com/openshift/ci-tools/pkg/prowexec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -635,11 +636,15 @@ func replaceClusterProfiles(volumes []v1.Volume, profiles []config.ConfigMapSour
 	}
 }
 
-// Executor holds all the information needed for the jobs to be executed.
-type Executor struct {
-	Metrics *ExecutionMetrics
+type RehearsalExecutor interface {
+	prowexec.Prow
+	Metrics() *ExecutionMetrics
+}
 
+// executor holds all the information needed for the jobs to be executed.
+type executor struct {
 	dryRun     bool
+	metrics    *ExecutionMetrics
 	presubmits []*prowconfig.Presubmit
 	prNumber   int
 	prRepo     string
@@ -650,9 +655,9 @@ type Executor struct {
 
 // NewExecutor creates an executor. It also confgures the rehearsal jobs as a list of presubmits.
 func NewExecutor(presubmits []*prowconfig.Presubmit, prNumber int, prRepo string, refs *pjapi.Refs,
-	dryRun bool, loggers Loggers, pjclient pj.ProwJobInterface) *Executor {
-	return &Executor{
-		Metrics: &ExecutionMetrics{},
+	dryRun bool, loggers Loggers, pjclient pj.ProwJobInterface) RehearsalExecutor {
+	return &executor{
+		metrics: &ExecutionMetrics{},
 
 		dryRun:     dryRun,
 		presubmits: presubmits,
@@ -674,12 +679,16 @@ func printAsYaml(pjs []*pjapi.ProwJob) error {
 	return err
 }
 
+func (e *executor) Metrics() *ExecutionMetrics {
+	return e.metrics
+}
+
 // ExecuteJobs takes configs for a set of jobs which should be "rehearsed", and
 // creates the ProwJobs that perform the actual rehearsal. *Rehearsal* means
 // a "trial" execution of a Prow job configuration when the *job config* config
 // is changed, giving feedback to Prow config authors on how the changes of the
 // config would affect the "production" Prow jobs run on the actual target repos
-func (e *Executor) ExecuteJobs() (bool, error) {
+func (e *executor) Do() (bool, error) {
 	submitSuccess := true
 	pjs, err := e.submitRehearsals()
 	if err != nil {
@@ -712,7 +721,7 @@ func (e *Executor) ExecuteJobs() (bool, error) {
 	return waitSuccess, err
 }
 
-func (e *Executor) waitForJobs(jobs sets.String, selector string) (bool, error) {
+func (e *executor) waitForJobs(jobs sets.String, selector string) (bool, error) {
 	if len(jobs) == 0 {
 		return true, nil
 	}
@@ -737,11 +746,11 @@ func (e *Executor) waitForJobs(jobs sets.String, selector string) (bool, error) 
 			switch prowJob.Status.State {
 			case pjapi.FailureState, pjapi.AbortedState, pjapi.ErrorState:
 				e.loggers.Job.WithFields(fields).Error("Job failed")
-				e.Metrics.FailedRehearsals = append(e.Metrics.FailedRehearsals, prowJob.Spec.Job)
+				e.metrics.FailedRehearsals = append(e.metrics.FailedRehearsals, prowJob.Spec.Job)
 				success = false
 			case pjapi.SuccessState:
 				e.loggers.Job.WithFields(fields).Info("Job succeeded")
-				e.Metrics.PassedRehearsals = append(e.Metrics.FailedRehearsals, prowJob.Spec.Job)
+				e.metrics.PassedRehearsals = append(e.metrics.PassedRehearsals, prowJob.Spec.Job)
 			default:
 				continue
 			}
@@ -778,7 +787,7 @@ func removeConfigResolverFlags(args []string) []string {
 	return newArgs
 }
 
-func (e *Executor) submitRehearsals() ([]*pjapi.ProwJob, error) {
+func (e *executor) submitRehearsals() ([]*pjapi.ProwJob, error) {
 	var errors []error
 	var pjs []*pjapi.ProwJob
 
@@ -789,7 +798,7 @@ func (e *Executor) submitRehearsals() ([]*pjapi.ProwJob, error) {
 			errors = append(errors, err)
 			continue
 		}
-		e.Metrics.SubmittedRehearsals = append(e.Metrics.SubmittedRehearsals, created.Spec.Job)
+		e.metrics.SubmittedRehearsals = append(e.metrics.SubmittedRehearsals, created.Spec.Job)
 		e.loggers.Job.WithFields(pjutil.ProwJobFields(created)).Info("Submitted rehearsal prowjob")
 		pjs = append(pjs, created)
 	}
@@ -797,7 +806,7 @@ func (e *Executor) submitRehearsals() ([]*pjapi.ProwJob, error) {
 	return pjs, kerrors.NewAggregate(errors)
 }
 
-func (e *Executor) submitPresubmit(job *prowconfig.Presubmit) (*pjapi.ProwJob, error) {
+func (e *executor) submitPresubmit(job *prowconfig.Presubmit) (*pjapi.ProwJob, error) {
 	prowJob := pjutil.NewProwJob(pjutil.PresubmitSpec(*job, *e.refs), job.Labels, job.Annotations)
 	e.loggers.Job.WithFields(pjutil.ProwJobFields(&prowJob)).Info("Submitting a new prowjob.")
 	return e.pjclient.Create(&prowJob)
