@@ -197,7 +197,7 @@ func main() {
 	})
 
 	if err := opt.Complete(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		opt.Report([]error{results.ForReason("loading_args").ForError(err)})
 		os.Exit(1)
 	}
@@ -212,7 +212,7 @@ func main() {
 		for _, err := range errs {
 			message.WriteString(fmt.Sprintf("\n  * %s", err.Error()))
 		}
-		fmt.Fprintf(os.Stderr, "error: some steps failed:%s\n", message.String())
+		_, _ = fmt.Fprintf(os.Stderr, "error: some steps failed:%s\n", message.String())
 		opt.Report(defaulted)
 		os.Exit(1)
 	}
@@ -348,7 +348,7 @@ func bindOptions(flag *flag.FlagSet) *options {
 	flag.StringVar(&opt.branch, "branch", "", "Branch of the project (used by configresolver)")
 	flag.StringVar(&opt.variant, "variant", "", "Variant of the project's ci-operator config (used by configresolver)")
 
-	flag.String("kubeconfig", "", "Legecay flag kept for compatibility reasons. Doesn't do anything.")
+	flag.String("kubeconfig", "", "Legacy flag kept for compatibility reasons. Doesn't do anything.")
 
 	flag.StringVar(&opt.pullSecretPath, "image-import-pull-secret", "", "A set of dockercfg credentials used to import images for the tag_specification.")
 
@@ -359,9 +359,9 @@ func bindOptions(flag *flag.FlagSet) *options {
 func (o *options) Complete() error {
 	if o.artifactDir == "" {
 		// user did not set an artifact dir, but we can default to the Prow dir if set
-		arifactDir, ok := os.LookupEnv(artifactsEnv)
+		artifactDir, ok := os.LookupEnv(artifactsEnv)
 		if ok {
-			o.artifactDir = arifactDir
+			o.artifactDir = artifactDir
 		}
 	}
 
@@ -692,7 +692,7 @@ func (o *options) resolveInputs(steps []api.Step) error {
 	// after the graph is created but before it is run down into the run step.
 	o.jobSpec.SetNamespace(o.namespace)
 
-	//If we can resolve the field, use it. If not, don't.
+	// If we can resolve the field, use it. If not, don't.
 	if routeGetter, err := routeclientset.NewForConfig(o.clusterConfig); err != nil {
 		log.Printf("could not get route client for cluster config")
 	} else {

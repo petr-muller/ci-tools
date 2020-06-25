@@ -93,8 +93,8 @@ type Metadata struct {
 }
 
 // BuildsImage checks if an image is built by the release configuration.
-func (c ReleaseBuildConfiguration) BuildsImage(name string) bool {
-	for _, i := range c.Images {
+func (config ReleaseBuildConfiguration) BuildsImage(name string) bool {
+	for _, i := range config.Images {
 		if string(i.To) == name {
 			return true
 		}
@@ -103,13 +103,13 @@ func (c ReleaseBuildConfiguration) BuildsImage(name string) bool {
 }
 
 // IsPipelineImage checks if `name` will be a tag in the pipeline image stream.
-func (c ReleaseBuildConfiguration) IsPipelineImage(name string) bool {
-	for i := range c.BaseImages {
+func (config ReleaseBuildConfiguration) IsPipelineImage(name string) bool {
+	for i := range config.BaseImages {
 		if i == name {
 			return true
 		}
 	}
-	for i := range c.BaseRPMImages {
+	for i := range config.BaseRPMImages {
 		if i == name {
 			return true
 		}
