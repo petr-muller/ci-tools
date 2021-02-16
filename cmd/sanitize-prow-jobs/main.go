@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/sirupsen/logrus"
+	v1 "k8s.io/test-infra/prow/apis/prowjobs/v1"
 
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	prowconfig "k8s.io/test-infra/prow/config"
@@ -105,15 +106,121 @@ func defaultJobConfig(jc *prowconfig.JobConfig, path string, config *dispatcher.
 	for k := range jc.PresubmitsStatic {
 		for idx := range jc.PresubmitsStatic[k] {
 			jc.PresubmitsStatic[k][idx].JobBase.Cluster = string(config.GetClusterForJob(jc.PresubmitsStatic[k][idx].JobBase, path))
+			if jc.PresubmitsStatic[k][idx].JobBase.Agent != string(v1.KubernetesAgent) {
+				continue
+			}
+			if jc.PresubmitsStatic[k][idx].JobBase.Spec.Containers[0].Command == nil {
+				continue
+			}
+			if jc.PresubmitsStatic[k][idx].JobBase.Spec.Containers[0].Command[0] == "ci-operator" {
+				kubeconfigArg := ""
+				for aIdx, arg := range jc.PresubmitsStatic[k][idx].JobBase.Spec.Containers[0].Args {
+					if strings.HasPrefix(arg, "--kubeconfig=") {
+						jc.PresubmitsStatic[k][idx].JobBase.Spec.Containers[0].Args = append(jc.PresubmitsStatic[k][idx].JobBase.Spec.Containers[0].Args[:aIdx], jc.PresubmitsStatic[k][idx].JobBase.Spec.Containers[0].Args[aIdx+1:]...)
+						kubeconfigArg = arg
+						break
+					}
+				}
+				vmName := ""
+				if kubeconfigArg != "" {
+					kubeconfigPath := strings.TrimPrefix(kubeconfigArg, "--kubeconfig=")
+					for vmIdx, vm := range jc.PresubmitsStatic[k][idx].JobBase.Spec.Containers[0].VolumeMounts {
+						if strings.HasPrefix(kubeconfigPath, vm.MountPath) {
+							jc.PresubmitsStatic[k][idx].JobBase.Spec.Containers[0].VolumeMounts = append(jc.PresubmitsStatic[k][idx].JobBase.Spec.Containers[0].VolumeMounts[:vmIdx], jc.PresubmitsStatic[k][idx].JobBase.Spec.Containers[0].VolumeMounts[vmIdx+1:]...)
+							vmName = vm.Name
+							break
+						}
+					}
+				}
+				if vmName != "" {
+					for vIdx, vol := range jc.PresubmitsStatic[k][idx].JobBase.Spec.Volumes {
+						if vol.Name == vmName {
+							jc.PresubmitsStatic[k][idx].JobBase.Spec.Volumes = append(jc.PresubmitsStatic[k][idx].JobBase.Spec.Volumes[:vIdx], jc.PresubmitsStatic[k][idx].JobBase.Spec.Volumes[vIdx+1:]...)
+							break
+						}
+					}
+				}
+			}
 		}
 	}
 	for k := range jc.PostsubmitsStatic {
 		for idx := range jc.PostsubmitsStatic[k] {
 			jc.PostsubmitsStatic[k][idx].JobBase.Cluster = string(config.GetClusterForJob(jc.PostsubmitsStatic[k][idx].JobBase, path))
+			if jc.PostsubmitsStatic[k][idx].JobBase.Agent != string(v1.KubernetesAgent) {
+				continue
+			}
+			if jc.PostsubmitsStatic[k][idx].JobBase.Spec.Containers[0].Command == nil {
+				continue
+			}
+			if jc.PostsubmitsStatic[k][idx].JobBase.Spec.Containers[0].Command[0] == "ci-operator" {
+				kubeconfigArg := ""
+				for aIdx, arg := range jc.PostsubmitsStatic[k][idx].JobBase.Spec.Containers[0].Args {
+					if strings.HasPrefix(arg, "--kubeconfig=") {
+						jc.PostsubmitsStatic[k][idx].JobBase.Spec.Containers[0].Args = append(jc.PostsubmitsStatic[k][idx].JobBase.Spec.Containers[0].Args[:aIdx], jc.PostsubmitsStatic[k][idx].JobBase.Spec.Containers[0].Args[aIdx+1:]...)
+						kubeconfigArg = arg
+						break
+					}
+				}
+				vmName := ""
+				if kubeconfigArg != "" {
+					kubeconfigPath := strings.TrimPrefix(kubeconfigArg, "--kubeconfig=")
+					for vmIdx, vm := range jc.PostsubmitsStatic[k][idx].JobBase.Spec.Containers[0].VolumeMounts {
+						if strings.HasPrefix(kubeconfigPath, vm.MountPath) {
+							jc.PostsubmitsStatic[k][idx].JobBase.Spec.Containers[0].VolumeMounts = append(jc.PostsubmitsStatic[k][idx].JobBase.Spec.Containers[0].VolumeMounts[:vmIdx], jc.PostsubmitsStatic[k][idx].JobBase.Spec.Containers[0].VolumeMounts[vmIdx+1:]...)
+							vmName = vm.Name
+							break
+						}
+					}
+				}
+				if vmName != "" {
+					for vIdx, vol := range jc.PostsubmitsStatic[k][idx].JobBase.Spec.Volumes {
+						if vol.Name == vmName {
+							jc.PostsubmitsStatic[k][idx].JobBase.Spec.Volumes = append(jc.PostsubmitsStatic[k][idx].JobBase.Spec.Volumes[:vIdx], jc.PostsubmitsStatic[k][idx].JobBase.Spec.Volumes[vIdx+1:]...)
+							break
+						}
+					}
+				}
+			}
 		}
 	}
 	for idx := range jc.Periodics {
 		jc.Periodics[idx].JobBase.Cluster = string(config.GetClusterForJob(jc.Periodics[idx].JobBase, path))
+		if jc.Periodics[idx].JobBase.Agent != string(v1.KubernetesAgent) {
+			continue
+		}
+		if jc.Periodics[idx].JobBase.Spec.Containers[0].Command == nil {
+			continue
+		}
+		if jc.Periodics[idx].JobBase.Spec.Containers[0].Command[0] == "ci-operator" {
+			kubeconfigArg := ""
+			for aIdx, arg := range jc.Periodics[idx].JobBase.Spec.Containers[0].Args {
+				if strings.HasPrefix(arg, "--kubeconfig=") {
+					jc.Periodics[idx].JobBase.Spec.Containers[0].Args = append(jc.Periodics[idx].JobBase.Spec.Containers[0].Args[:aIdx], jc.Periodics[idx].JobBase.Spec.Containers[0].Args[aIdx+1:]...)
+					kubeconfigArg = arg
+					break
+				}
+			}
+			vmName := ""
+			if kubeconfigArg != "" {
+				kubeconfigPath := strings.TrimPrefix(kubeconfigArg, "--kubeconfig=")
+				for vmIdx, vm := range jc.Periodics[idx].JobBase.Spec.Containers[0].VolumeMounts {
+					if strings.HasPrefix(kubeconfigPath, vm.MountPath) {
+						jc.Periodics[idx].JobBase.Spec.Containers[0].VolumeMounts = append(jc.Periodics[idx].JobBase.Spec.Containers[0].VolumeMounts[:vmIdx], jc.Periodics[idx].JobBase.Spec.Containers[0].VolumeMounts[vmIdx+1:]...)
+						vmName = vm.Name
+						break
+					}
+				}
+			}
+			if vmName != "" {
+				for vIdx, vol := range jc.Periodics[idx].JobBase.Spec.Volumes {
+					if vol.Name == vmName {
+						jc.Periodics[idx].JobBase.Spec.Volumes = append(jc.Periodics[idx].JobBase.Spec.Volumes[:vIdx], jc.Periodics[idx].JobBase.Spec.Volumes[vIdx+1:]...)
+						break
+					}
+				}
+			}
+		}
+
 	}
 }
 
