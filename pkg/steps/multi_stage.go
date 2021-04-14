@@ -151,12 +151,12 @@ func (s *multiStageTestStep) run(ctx context.Context) error {
 	}
 	var errs []error
 	if err := s.runSteps(ctx, s.pre, env, true, false, secretVolumes, secretVolumeMounts); err != nil {
-		errs = append(errs, fmt.Errorf("%q pre steps failed: %w", s.name, err))
+		errs = append(errs, fmt.Errorf("pre steps failed: %w", err))
 	} else if err := s.runSteps(ctx, s.test, env, true, len(errs) != 0, secretVolumes, secretVolumeMounts); err != nil {
-		errs = append(errs, fmt.Errorf("%q test steps failed: %w", s.name, err))
+		errs = append(errs, fmt.Errorf("test steps failed: %w", err))
 	}
 	if err := s.runSteps(context.Background(), s.post, env, false, len(errs) != 0, secretVolumes, secretVolumeMounts); err != nil {
-		errs = append(errs, fmt.Errorf("%q post steps failed: %w", s.name, err))
+		errs = append(errs, fmt.Errorf("post steps failed: %w", err))
 	}
 	return utilerrors.NewAggregate(errs)
 }
@@ -531,7 +531,7 @@ func (s *multiStageTestStep) generatePods(steps []api.LiteralTestStep, env []cor
 			pod.OwnerReferences = append(pod.OwnerReferences, *owner)
 		}
 		if s.profile != "" && s.clusterClaim != nil {
-			//should never happen
+			// should never happen
 			errs = append(errs, fmt.Errorf("cannot set both cluster_profile and cluster_claim in a test"))
 		}
 		if s.clusterClaim != nil {
@@ -798,12 +798,14 @@ func (s *multiStageTestStep) runPod(ctx context.Context, pod *coreapi.Pod, notif
 		pod = newPod
 	}
 	finished := time.Now()
-	duration := finished.Sub(start)
-	verb := "succeeded"
+	duration := finished.Sub(start).Round(time.Second)
+	stepUrl := fmt.Sprintf("https://steps.ci.openshift.org/reference/%s", strings.TrimPrefix(pod.Name, s.name+"-"))
 	if err != nil {
-		verb = "failed"
+		logrus.Errorf("Step %s failed after %s (see %s for owners and information about the step)", pod.Name, duration.String(), stepUrl)
+	} else {
+		logrus.Infof("Step passed %s after %s.", pod.Name, duration.String())
 	}
-	logrus.Infof("Step %s %s after %s.", pod.Name, verb, duration.String())
+
 	s.subSteps = append(s.subSteps, api.CIOperatorStepDetailInfo{
 		StepName:    pod.Name,
 		Description: fmt.Sprintf("Run pod %s", pod.Name),
@@ -816,7 +818,7 @@ func (s *multiStageTestStep) runPod(ctx context.Context, pod *coreapi.Pod, notif
 	s.subTests = append(s.subTests, notifier.SubTests(fmt.Sprintf("%s - %s ", s.Description(), pod.Name))...)
 	if err != nil {
 		linksText := strings.Builder{}
-		linksText.WriteString(fmt.Sprintf("Link to step on registry info site: https://steps.ci.openshift.org/reference/%s", strings.TrimPrefix(pod.Name, s.name+"-")))
+		linksText.WriteString(fmt.Sprintf("Link to step on registry info site: %s", stepUrl))
 		linksText.WriteString(fmt.Sprintf("\nLink to job on registry info site: https://steps.ci.openshift.org/job?org=%s&repo=%s&branch=%s&test=%s", s.config.Metadata.Org, s.config.Metadata.Repo, s.config.Metadata.Branch, s.name))
 		if s.config.Metadata.Variant != "" {
 			linksText.WriteString(fmt.Sprintf("&variant=%s", s.config.Metadata.Variant))
@@ -828,7 +830,7 @@ func (s *multiStageTestStep) runPod(ctx context.Context, pod *coreapi.Pod, notif
 				status = fmt.Sprintf("%s activeDeadlineSeconds=%d", status, *pod.Spec.ActiveDeadlineSeconds)
 			}
 		}
-		return fmt.Errorf("%q pod %q %s: %w\n%s", s.name, pod.Name, status, err, linksText.String())
+		return fmt.Errorf("pod %q %s\n%s", pod.Name, status, linksText.String())
 	}
 	return nil
 }
@@ -855,7 +857,7 @@ func getClusterClaimPodParams(secretVolumeMounts []coreapi.VolumeMount) ([]corea
 			}
 		}
 		if !foundMountPath {
-			//should never happen
+			// should never happen
 			errs = append(errs, fmt.Errorf("failed to find foundMountPath %s to create secret %s", mountPath, secretName))
 		}
 	}

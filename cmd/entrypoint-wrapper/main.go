@@ -56,7 +56,10 @@ func main() {
 		os.Exit(1)
 	}
 	if err := opt.run(); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		// We do not need to pollute output if the wrapped command simply run and failed
+		if _, ok := err.(*exec.ExitError); !ok {
+			fmt.Fprintln(os.Stderr, "error:", err)
+		}
 		os.Exit(1)
 	}
 }
@@ -109,7 +112,12 @@ func (o *options) run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	go uploadKubeconfig(ctx, o.client, o.name, o.dstPath, o.dry)
 	if err := execCmd(o.cmd); err != nil {
-		errs = append(errs, fmt.Errorf("failed to execute wrapped command: %w", err))
+		// Avoid wrapping (*exec.ExitError) instances so we do not lose that information
+		if _, ok := err.(*exec.ExitError); ok {
+			errs = append(errs, err)
+		} else {
+			errs = append(errs, fmt.Errorf("failed to execute wrapped command: %w (%T)", err, err))
+		}
 	}
 	// we will upload the secret from the post-execution state, so we know
 	// that the best-effort upload of the kubeconfig can exit now and so as
@@ -117,6 +125,11 @@ func (o *options) run() error {
 	cancel()
 	if err := createSecret(o.client, o.name, o.dstPath, o.dry); err != nil {
 		errs = append(errs, fmt.Errorf("failed to create/update secret: %w", err))
+	}
+
+	// If we only saw one error, return it directly so caller can do a (*exec.ExitError) check
+	if len(errs) == 1 {
+		return errs[0]
 	}
 	return utilerrors.NewAggregate(errs)
 }
