@@ -11,10 +11,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/afero"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	prowconfig "k8s.io/test-infra/prow/config"
@@ -129,6 +131,13 @@ type tideConfig struct {
 	Queries   prowconfig.TideQueries                 `json:"queries,omitempty"`
 }
 
+var noffLabels = sets.NewString("qe-approved", "docs-approved", "px-approved")
+var noffRepos = sets.NewString()
+var mainBr = sets.NewString("main")
+var master = sets.NewString("master")
+var both = mainBr.Union(master)
+var validBug = sets.NewString("bugzilla/valid-bug")
+
 func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.ProwConfig, error) {
 	configsByOrgRepo := map[prowconfig.OrgRepo]*prowConfigWithPointers{}
 	for org, orgConfig := range pc.BranchProtection.Orgs {
@@ -170,6 +179,20 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 	}
 
 	for _, query := range pc.Tide.Queries {
+		requiredLabels := sets.NewString(query.Labels...)
+		branches := sets.NewString(query.IncludedBranches...)
+		if branches.Equal(mainBr) || branches.Equal(master) || branches.Equal(both) {
+			if requiredLabels.IsSuperset(noffLabels) {
+				noffRepos.Insert(query.Repos...)
+			}
+		}
+	}
+
+	for noff := range noffRepos {
+		fmt.Printf("- no-FF repo: %s\n", noff)
+	}
+
+	for _, query := range pc.Tide.Queries {
 		for _, org := range query.Orgs {
 			if configsByOrgRepo[prowconfig.OrgRepo{Org: org}] == nil {
 				configsByOrgRepo[prowconfig.OrgRepo{Org: org}] = &prowConfigWithPointers{}
@@ -203,7 +226,12 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 			}
 			queryCopy.Orgs = nil
 			queryCopy.Repos = []string{repo}
+			if !noffRepos.Has(repo) {
+				ensureCF(queryCopy)
+			}
 			configsByOrgRepo[orgRepo].Tide.Queries = append(configsByOrgRepo[orgRepo].Tide.Queries, *queryCopy)
+			sort.Strings(queryCopy.Labels)
+			sort.Strings(queryCopy.Labels)
 		}
 	}
 	pc.Tide.Queries = nil
@@ -215,6 +243,15 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 	}
 
 	return pc, nil
+}
+
+func ensureCF(query *prowconfig.TideQuery) {
+	requiredLabels := sets.NewString(query.Labels...)
+	branches := sets.NewString(query.IncludedBranches...)
+	if branches.Equal(mainBr) || branches.Equal(master) || branches.Equal(both) {
+		requiredLabels = requiredLabels.Difference(validBug)
+		query.Labels = requiredLabels.List()
+	}
 }
 
 func deepCopyTideQuery(q *prowconfig.TideQuery) (*prowconfig.TideQuery, error) {
