@@ -131,12 +131,12 @@ type tideConfig struct {
 	Queries   prowconfig.TideQueries                 `json:"queries,omitempty"`
 }
 
-var noffLabels = sets.NewString("qe-approved", "docs-approved", "px-approved")
 var noffRepos = sets.NewString()
-var mainBr = sets.NewString("main")
-var master = sets.NewString("master")
-var both = mainBr.Union(master)
-var validBug = sets.NewString("bugzilla/valid-bug")
+var r9 = sets.NewString("release-4.9")
+var o9 = sets.NewString("openshift-4.9")
+var r8 = sets.NewString("release-4.8")
+var o8 = sets.NewString("openshift-4.8")
+var both9 = r9.Union(o9)
 
 func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.ProwConfig, error) {
 	configsByOrgRepo := map[prowconfig.OrgRepo]*prowConfigWithPointers{}
@@ -179,12 +179,9 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 	}
 
 	for _, query := range pc.Tide.Queries {
-		requiredLabels := sets.NewString(query.Labels...)
 		branches := sets.NewString(query.IncludedBranches...)
-		if branches.Equal(mainBr) || branches.Equal(master) || branches.Equal(both) {
-			if requiredLabels.IsSuperset(noffLabels) {
-				noffRepos.Insert(query.Repos...)
-			}
+		if branches.Equal(r9) || branches.Equal(o9) || branches.Equal(both9) {
+			noffRepos.Insert(query.Repos...)
 		}
 	}
 
@@ -226,7 +223,7 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 			}
 			queryCopy.Orgs = nil
 			queryCopy.Repos = []string{repo}
-			if !noffRepos.Has(repo) {
+			if noffRepos.Has(repo) {
 				ensureCF(queryCopy)
 			}
 			configsByOrgRepo[orgRepo].Tide.Queries = append(configsByOrgRepo[orgRepo].Tide.Queries, *queryCopy)
@@ -246,12 +243,15 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 }
 
 func ensureCF(query *prowconfig.TideQuery) {
-	requiredLabels := sets.NewString(query.Labels...)
-	branches := sets.NewString(query.IncludedBranches...)
-	if branches.Equal(mainBr) || branches.Equal(master) || branches.Equal(both) {
-		requiredLabels = requiredLabels.Difference(validBug)
-		query.Labels = requiredLabels.List()
+	branches := sets.NewString(query.ExcludedBranches...)
+	if branches.IsSuperset(r8) {
+		branches = branches.Union(r9)
 	}
+	if branches.IsSuperset(o8) {
+		branches = branches.Union(o9)
+	}
+	query.ExcludedBranches = branches.List()
+	sort.Strings(query.ExcludedBranches)
 }
 
 func deepCopyTideQuery(q *prowconfig.TideQuery) (*prowconfig.TideQuery, error) {
