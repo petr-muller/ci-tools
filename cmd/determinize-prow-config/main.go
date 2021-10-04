@@ -15,6 +15,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/afero"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	prowconfig "k8s.io/test-infra/prow/config"
@@ -203,6 +204,8 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 			}
 			queryCopy.Orgs = nil
 			queryCopy.Repos = []string{repo}
+
+			ensureBackportRiskAssessed(queryCopy)
 			configsByOrgRepo[orgRepo].Tide.Queries = append(configsByOrgRepo[orgRepo].Tide.Queries, *queryCopy)
 		}
 	}
@@ -215,6 +218,14 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 	}
 
 	return pc, nil
+}
+
+func ensureBackportRiskAssessed(q *prowconfig.TideQuery) {
+	requiredLabels := sets.NewString(q.Labels...)
+	if requiredLabels.Has("cherry-pick-approved") {
+		requiredLabels.Insert("backport-risk-assessed")
+		q.Labels = requiredLabels.List()
+	}
 }
 
 func deepCopyTideQuery(q *prowconfig.TideQuery) (*prowconfig.TideQuery, error) {
