@@ -15,6 +15,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/afero"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	prowconfig "k8s.io/test-infra/prow/config"
@@ -203,6 +204,9 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 			}
 			queryCopy.Orgs = nil
 			queryCopy.Repos = []string{repo}
+			ensureStaffEngFor410(queryCopy)
+			ensureCherryPickFor49(queryCopy)
+			ensureExcluded49And410(queryCopy)
 			configsByOrgRepo[orgRepo].Tide.Queries = append(configsByOrgRepo[orgRepo].Tide.Queries, *queryCopy)
 		}
 	}
@@ -215,6 +219,101 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 	}
 
 	return pc, nil
+}
+
+var r49 = sets.NewString("release-4.9")
+var o49 = sets.NewString("openshift-4.9")
+var or49 = r49.Union(o49)
+var r410 = sets.NewString("release-4.10")
+var o410 = sets.NewString("openshift-4.10")
+var or410 = r410.Union(o410)
+
+var weirdExcludedAllowlist = sets.NewString(
+	// Assisted
+	"openshift/assisted-installer",
+	"openshift/assisted-installer-agent",
+	"openshift/assisted-test-infra",
+	"openshift/assisted-image-service",
+	"openshift/assisted-service",
+	// Weird but consistent, no OCP criteria
+	"openshift/windows-machine-config-bootstrapper",
+	"openshift/windows-machine-config-operator",
+	"openshift-priv/windows-machine-config-bootstrapper",
+	"openshift-priv/windows-machine-config-operator",
+	"red-hat-storage/ceph-csi",
+).Union(weirdCPNo49Allowlist)
+
+func ensureExcluded49And410(q *prowconfig.TideQuery) {
+	branches := sets.NewString(q.ExcludedBranches...)
+	if branches.Has("release-4.8") {
+		branches.Insert("release-4.9")
+		branches.Insert("release-4.10")
+	}
+	if branches.Has("openshift-4.8") {
+		branches.Insert("openshift-4.9")
+		branches.Insert("openshift-4.10")
+	}
+	if branches.Len() > 0 {
+		if branches.Intersection(or410).Len() == 0 && !weirdExcludedAllowlist.Has(q.Repos[0]) {
+			fmt.Printf("Weird complement query (without 4.10): %s\n", q.Repos)
+		}
+	}
+	q.ExcludedBranches = branches.List()
+}
+
+var weirdCPNo49Allowlist = sets.NewString(
+	// Logging team
+	"openshift/cluster-logging-operator",
+	"openshift/elasticsearch-operator",
+	"openshift/elasticsearch-proxy",
+	"openshift/origin-aggregated-logging",
+	// Does not seem to be even branched, likely does not need this config
+	"openshift/app-netutil",
+	"openshift/network-tools",
+	"openshift-priv/app-netutil",
+	"openshift-priv/network-tools",
+)
+
+func ensureCherryPickFor49(q *prowconfig.TideQuery) {
+	reqLabels := sets.NewString(q.Labels...)
+	branches := sets.NewString(q.IncludedBranches...)
+	if reqLabels.Has("cherry-pick-approved") {
+		if branches.Has("release-4.8") {
+			branches.Insert("release-4.9")
+		}
+		if branches.Has("openshift-4.8") {
+			branches.Insert("openshift-4.9")
+		}
+		if branches.Intersection(or49).Len() == 0 && !weirdCPNo49Allowlist.Has(q.Repos[0]) {
+			fmt.Printf("Weird cherry-pick-approved query (without 4.9): %s\n", q.Repos)
+		}
+		if branches.Intersection(or410).Len() != 0 {
+			fmt.Printf("Weird cherry-pick-approved query (with 4.10): %s\n", q.Repos)
+		}
+	}
+	q.IncludedBranches = branches.List()
+}
+
+func ensureStaffEngFor410(q *prowconfig.TideQuery) {
+	reqLabels := sets.NewString(q.Labels...)
+	branches := sets.NewString(q.IncludedBranches...)
+
+	if reqLabels.Has("staff-eng-approved") {
+		if branches.Has("release-4.9") {
+			branches.Delete("release-4.9")
+			branches.Insert("release-4.10")
+		}
+		if branches.Has("openshift-4.9") {
+			branches.Delete("openshift-4.9")
+			branches.Insert("openshift-4.10")
+		}
+
+		if !(branches.Equal(r410) || branches.Equal(o410) || branches.Equal(or410)) {
+			fmt.Printf("Weird staff-eng-approved query: %s\n", q.Repos)
+		}
+	}
+	q.IncludedBranches = branches.List()
+
 }
 
 func deepCopyTideQuery(q *prowconfig.TideQuery) (*prowconfig.TideQuery, error) {
