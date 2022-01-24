@@ -15,6 +15,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/afero"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	prowconfig "k8s.io/test-infra/prow/config"
@@ -129,6 +130,17 @@ type tideConfig struct {
 	Queries   prowconfig.TideQueries                 `json:"queries,omitempty"`
 }
 
+var mainBr = sets.NewString("main")
+var master = sets.NewString("master")
+var both = mainBr.Union(master)
+
+var noffLabels = sets.NewString("qe-approved", "docs-approved", "px-approved")
+var validBug = sets.NewString("bugzilla/valid-bug")
+
+var bzsOnMaster = sets.NewString()
+var noFF = sets.NewString()
+var cf sets.String
+
 func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.ProwConfig, error) {
 	configsByOrgRepo := map[prowconfig.OrgRepo]*prowConfigWithPointers{}
 	for org, orgConfig := range pc.BranchProtection.Orgs {
@@ -170,6 +182,28 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 	}
 
 	for _, query := range pc.Tide.Queries {
+		branches := sets.NewString(query.IncludedBranches...)
+		if len(branches.Intersection(both)) == 0 {
+			continue
+		}
+		labels := sets.NewString(query.Labels...)
+		if len(labels.Intersection(noffLabels)) > 0 {
+			for _, repo := range query.Repos {
+				noFF.Insert(repo)
+			}
+		}
+		if len(labels.Intersection(validBug)) > 0 {
+			for _, repo := range query.Repos {
+				bzsOnMaster.Insert(repo)
+			}
+		}
+	}
+	cf = bzsOnMaster.Difference(noFF)
+	fmt.Printf("No FF repositories:           %s\n\n", strings.Join(noFF.List(), ","))
+	fmt.Printf("BZ-gated master repositories: %s\n\n", strings.Join(bzsOnMaster.List(), ","))
+	fmt.Printf("CF repositories:              %s\n\n", strings.Join(cf.List(), ","))
+
+	for _, query := range pc.Tide.Queries {
 		for _, org := range query.Orgs {
 			if configsByOrgRepo[prowconfig.OrgRepo{Org: org}] == nil {
 				configsByOrgRepo[prowconfig.OrgRepo{Org: org}] = &prowConfigWithPointers{}
@@ -201,6 +235,9 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 			if err != nil {
 				return nil, fmt.Errorf("failed to deepcopy tide query %+v: %w", query, err)
 			}
+			if cf.Has(repo) {
+				ensureCF(queryCopy)
+			}
 			queryCopy.Orgs = nil
 			queryCopy.Repos = []string{repo}
 			configsByOrgRepo[orgRepo].Tide.Queries = append(configsByOrgRepo[orgRepo].Tide.Queries, *queryCopy)
@@ -215,6 +252,14 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 	}
 
 	return pc, nil
+}
+
+func ensureCF(q *prowconfig.TideQuery) {
+	branches := sets.NewString(q.IncludedBranches...)
+	if len(branches.Intersection(both)) == 0 {
+		return
+	}
+	q.Labels = sets.NewString(q.Labels...).Difference(validBug).List()
 }
 
 func deepCopyTideQuery(q *prowconfig.TideQuery) (*prowconfig.TideQuery, error) {
