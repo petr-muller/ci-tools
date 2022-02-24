@@ -15,6 +15,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/afero"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	prowconfig "k8s.io/test-infra/prow/config"
@@ -50,6 +51,10 @@ func gatherOptions() options {
 	}
 	return o
 }
+
+var r41 = sets.NewString("release-4.1")
+var o41 = sets.NewString("openshift-4.1")
+var or41 = r41.Union(o41)
 
 func main() {
 	o := gatherOptions()
@@ -203,6 +208,10 @@ func shardProwConfig(pc *prowconfig.ProwConfig, target afero.Fs) (*prowconfig.Pr
 			}
 			queryCopy.Orgs = nil
 			queryCopy.Repos = []string{repo}
+			included := sets.NewString(queryCopy.IncludedBranches...)
+			if len(included.Intersection(or41)) > 0 {
+				queryCopy.IncludedBranches = included.Difference(or41).List()
+			}
 			configsByOrgRepo[orgRepo].Tide.Queries = append(configsByOrgRepo[orgRepo].Tide.Queries, *queryCopy)
 		}
 	}
