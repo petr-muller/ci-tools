@@ -167,14 +167,7 @@ func main() {
 				continue
 			}
 
-			// when we're initializing the branch, we just want to make sure
-			// it is in sync with the current branch that is promoting
 			logger := logger.WithField("future-branch", futureBranch)
-			command := []string{"ls-remote", remote.String(), fmt.Sprintf("refs/heads/%s", futureBranch)}
-			if err := gitCmd(logger, command...); err != nil {
-				appendFailedConfig(configuration)
-				continue
-			}
 
 			if !o.Confirm {
 				logger.Info("Would create new branch.")
