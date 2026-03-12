@@ -236,6 +236,27 @@ func fetchDeeper(logger *logrus.Entry, remote *url.URL, gitCmd gitCmd, repoInfo 
 	return nil
 }
 
+// isTransientError checks if a git command error is transient and worth retrying.
+func isTransientError(output string) bool {
+	transientIndicators := []string{
+		"Connection timed out",
+		"Connection reset",
+		"Connection refused",
+		"Could not resolve host",
+		"The requested URL returned error: 5",
+		"error: RPC failed",
+		"SSL_ERROR",
+		"unexpected disconnect",
+		"early EOF",
+	}
+	for _, indicator := range transientIndicators {
+		if strings.Contains(output, indicator) {
+			return true
+		}
+	}
+	return false
+}
+
 func gitCmdFunc(dir string) gitCmd {
 	return func(l *logrus.Entry, args ...string) error {
 		l = l.WithField("commands", fmt.Sprintf("git %s", strings.Join(args, " ")))
@@ -248,7 +269,11 @@ func gitCmdFunc(dir string) gitCmd {
 			c.Dir = dir
 			b, err = c.CombinedOutput()
 			if err != nil {
-				err = fmt.Errorf("running git %v returned error %w with output %q", args, err, string(b))
+				output := string(b)
+				err = fmt.Errorf("running git %v returned error %w with output %q", args, err, output)
+				if !isTransientError(output) {
+					break
+				}
 				l.WithError(err).Debugf("Retrying #%d, if this is not the 3rd try then this will be retried", i+1)
 				time.Sleep(sleepyTime)
 				sleepyTime *= 2
