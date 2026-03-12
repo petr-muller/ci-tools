@@ -11,6 +11,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -82,6 +83,18 @@ func (f *censoringFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 
 type gitCmd func(l *logrus.Entry, args ...string) error
 
+// branchWork groups all configs that share the same org/repo/branch.
+type branchWork struct {
+	info    config.Info
+	configs []*api.ReleaseBuildConfiguration
+}
+
+// repoWork groups all branches for a single org/repo.
+type repoWork struct {
+	org, repo string
+	branches  []*branchWork
+}
+
 func main() {
 	o := gatherOptions()
 	if err := o.Validate(); err != nil {
@@ -114,15 +127,10 @@ func main() {
 		}
 	}
 
+	// Phase 1: Collect and group work items by org/repo and branch.
+	repoMap := map[string]*repoWork{}
+	branchMap := map[string]map[string]*branchWork{}
 	brachingFailure := false
-	failedConfigs := sets.New[string]()
-	appendFailedConfig := func(c *api.ReleaseBuildConfiguration) {
-		configInfo := fmt.Sprintf("%s/%s@%s", c.Metadata.Org, c.Metadata.Repo, c.Metadata.Branch)
-		if c.Metadata.Variant != "" {
-			configInfo += "__" + c.Metadata.Variant
-		}
-		failedConfigs.Insert(configInfo)
-	}
 
 	if err := o.OperateOnCIOperatorConfigDir(o.ConfigDir, api.WithoutOKD, func(configuration *api.ReleaseBuildConfiguration, repoInfo *config.Info) error {
 		if ignoreSet.Has(repoInfo.Org) || ignoreSet.Has(fmt.Sprintf("%s/%s", repoInfo.Org, repoInfo.Repo)) {
@@ -130,79 +138,64 @@ func main() {
 			return nil
 		}
 
-		logger := config.LoggerForInfo(*repoInfo)
-
-		repoDir := path.Join(gitDir, repoInfo.Org, repoInfo.Repo)
-		if err := os.MkdirAll(repoDir, 0775); err != nil {
-			logger.WithError(err).Fatal("could not ensure git dir existed")
-			return nil
+		repoKey := fmt.Sprintf("%s/%s", repoInfo.Org, repoInfo.Repo)
+		if _, ok := repoMap[repoKey]; !ok {
+			repoMap[repoKey] = &repoWork{org: repoInfo.Org, repo: repoInfo.Repo}
+			branchMap[repoKey] = map[string]*branchWork{}
 		}
 
-		gitCmd := gitCmdFunc(repoDir)
-
-		remote, err := url.Parse(fmt.Sprintf("https://github.com/%s/%s", repoInfo.Org, repoInfo.Repo))
-		if err != nil {
-			logger.WithError(err).Error("Could not construct remote URL.")
-			appendFailedConfig(configuration)
-			return err
+		bm := branchMap[repoKey]
+		if _, ok := bm[repoInfo.Branch]; !ok {
+			bm[repoInfo.Branch] = &branchWork{info: *repoInfo}
 		}
-		if o.Confirm {
-			remote.User = url.UserPassword(o.username, token)
-		}
-		for _, command := range [][]string{{"init"}, {"fetch", "--depth", "1", remote.String(), repoInfo.Branch}} {
-			if err := gitCmd(logger, command...); err != nil {
-				appendFailedConfig(configuration)
-				return err
-			}
-		}
+		bm[repoInfo.Branch].configs = append(bm[repoInfo.Branch].configs, configuration)
 
-		for _, futureRelease := range o.FutureReleases.Strings() {
-			futureBranch, err := promotion.DetermineReleaseBranch(o.CurrentRelease, futureRelease, repoInfo.Branch)
-			if err != nil {
-				logger.WithError(err).Error("could not determine release branch")
-				appendFailedConfig(configuration)
-				return nil
-			}
-			if futureBranch == repoInfo.Branch {
-				continue
-			}
-
-			logger := logger.WithField("future-branch", futureBranch)
-
-			if !o.Confirm {
-				logger.Info("Would create new branch.")
-				continue
-			}
-
-			for depth := 1; depth < 9; depth += 1 {
-				retry, err := pushBranch(logger, remote, futureBranch, gitCmd)
-				if err != nil {
-					logger.WithError(err).Error("Failed to push branch")
-					appendFailedConfig(configuration)
-					break
-				}
-
-				if !retry {
-					break
-				}
-
-				if depth == 8 && retry {
-					logger.Error("Could not push branch even with retries.")
-					appendFailedConfig(configuration)
-					break
-				}
-
-				if err := fetchDeeper(logger, remote, gitCmd, repoInfo, int(math.Exp2(float64(depth)))); err != nil {
-					appendFailedConfig(configuration)
-					return nil
-				}
-			}
-		}
 		return nil
 	}); err != nil {
 		logrus.WithError(err).Error("Could not branch configurations.")
 		brachingFailure = true
 	}
+
+	// Assemble final work list.
+	var work []*repoWork
+	for key, rw := range repoMap {
+		for _, bw := range branchMap[key] {
+			rw.branches = append(rw.branches, bw)
+		}
+		work = append(work, rw)
+	}
+
+	// Phase 2: Process repos in parallel.
+	var (
+		mu            sync.Mutex
+		failedConfigs = sets.New[string]()
+	)
+	appendFailedConfigs := func(configs []*api.ReleaseBuildConfiguration) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range configs {
+			configInfo := fmt.Sprintf("%s/%s@%s", c.Metadata.Org, c.Metadata.Repo, c.Metadata.Branch)
+			if c.Metadata.Variant != "" {
+				configInfo += "__" + c.Metadata.Variant
+			}
+			failedConfigs.Insert(configInfo)
+		}
+	}
+
+	sem := make(chan struct{}, 16)
+	var wg sync.WaitGroup
+
+	for _, rw := range work {
+		wg.Add(1)
+		go func(rw *repoWork) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			processRepo(rw, gitDir, &o, token, appendFailedConfigs)
+		}(rw)
+	}
+
+	wg.Wait()
 
 	if len(failedConfigs) > 0 {
 		logrus.WithField("configs", failedConfigs.UnsortedList()).Error("Failed configurations.")
@@ -211,6 +204,92 @@ func main() {
 
 	if brachingFailure {
 		os.Exit(1)
+	}
+}
+
+func processRepo(rw *repoWork, gitDir string, o *options, token string, appendFailedConfigs func([]*api.ReleaseBuildConfiguration)) {
+	repoDir := path.Join(gitDir, rw.org, rw.repo)
+	repoLogger := logrus.WithFields(logrus.Fields{"org": rw.org, "repo": rw.repo})
+
+	if err := os.MkdirAll(repoDir, 0775); err != nil {
+		repoLogger.WithError(err).Error("could not ensure git dir existed")
+		for _, bw := range rw.branches {
+			appendFailedConfigs(bw.configs)
+		}
+		return
+	}
+
+	git := gitCmdFunc(repoDir)
+
+	remote, err := url.Parse(fmt.Sprintf("https://github.com/%s/%s", rw.org, rw.repo))
+	if err != nil {
+		repoLogger.WithError(err).Error("Could not construct remote URL.")
+		for _, bw := range rw.branches {
+			appendFailedConfigs(bw.configs)
+		}
+		return
+	}
+	if o.Confirm {
+		remote.User = url.UserPassword(o.username, token)
+	}
+
+	if err := git(repoLogger, "init"); err != nil {
+		for _, bw := range rw.branches {
+			appendFailedConfigs(bw.configs)
+		}
+		return
+	}
+
+	for _, bw := range rw.branches {
+		logger := config.LoggerForInfo(bw.info)
+
+		if err := git(logger, "fetch", "--depth", "1", remote.String(), bw.info.Branch); err != nil {
+			appendFailedConfigs(bw.configs)
+			continue
+		}
+
+		for _, futureRelease := range o.FutureReleases.Strings() {
+			futureBranch, err := promotion.DetermineReleaseBranch(o.CurrentRelease, futureRelease, bw.info.Branch)
+			if err != nil {
+				logger.WithError(err).Error("could not determine release branch")
+				appendFailedConfigs(bw.configs)
+				continue
+			}
+			if futureBranch == bw.info.Branch {
+				continue
+			}
+
+			futureLogger := logger.WithField("future-branch", futureBranch)
+
+			if !o.Confirm {
+				futureLogger.Info("Would create new branch.")
+				continue
+			}
+
+			for depth := 1; depth < 9; depth += 1 {
+				retry, err := pushBranch(futureLogger, remote, futureBranch, git)
+				if err != nil {
+					futureLogger.WithError(err).Error("Failed to push branch")
+					appendFailedConfigs(bw.configs)
+					break
+				}
+
+				if !retry {
+					break
+				}
+
+				if depth == 8 && retry {
+					futureLogger.Error("Could not push branch even with retries.")
+					appendFailedConfigs(bw.configs)
+					break
+				}
+
+				if err := fetchDeeper(futureLogger, remote, git, &bw.info, int(math.Exp2(float64(depth)))); err != nil {
+					appendFailedConfigs(bw.configs)
+					break
+				}
+			}
+		}
 	}
 }
 
