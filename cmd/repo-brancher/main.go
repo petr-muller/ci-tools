@@ -266,7 +266,7 @@ func processRepo(rw *repoWork, gitDir string, o *options, token string, appendFa
 				continue
 			}
 
-			for depth := 1; depth < 9; depth += 1 {
+			for depth := 1; depth <= 9; depth += 1 {
 				retry, err := pushBranch(futureLogger, remote, futureBranch, git)
 				if err != nil {
 					futureLogger.WithError(err).Error("Failed to push branch")
@@ -278,13 +278,19 @@ func processRepo(rw *repoWork, gitDir string, o *options, token string, appendFa
 					break
 				}
 
-				if depth == 8 && retry {
-					futureLogger.Error("Could not push branch even with retries.")
+				if depth == 9 {
+					futureLogger.Error("Could not push branch even after unshallowing.")
 					appendFailedConfigs(bw.configs)
 					break
 				}
 
-				if err := fetchDeeper(futureLogger, remote, git, &bw.info, int(math.Exp2(float64(depth)))); err != nil {
+				if depth == 8 {
+					futureLogger.Warn("Progressive deepening was not enough, fetching full history...")
+					if err := fetchUnshallow(futureLogger, remote, git, &bw.info); err != nil {
+						appendFailedConfigs(bw.configs)
+						break
+					}
+				} else if err := fetchDeeper(futureLogger, remote, git, &bw.info, int(math.Exp2(float64(depth)))); err != nil {
 					appendFailedConfigs(bw.configs)
 					break
 				}
@@ -309,6 +315,14 @@ func pushBranch(logger *logrus.Entry, remote *url.URL, futureBranch string, gitC
 
 func fetchDeeper(logger *logrus.Entry, remote *url.URL, gitCmd gitCmd, repoInfo *config.Info, depth int) error {
 	command := []string{"fetch", "--deepen", strconv.Itoa(depth), remote.String(), repoInfo.Branch}
+	if err := gitCmd(logger, command...); err != nil {
+		return err
+	}
+	return nil
+}
+
+func fetchUnshallow(logger *logrus.Entry, remote *url.URL, gitCmd gitCmd, repoInfo *config.Info) error {
+	command := []string{"fetch", "--unshallow", remote.String(), repoInfo.Branch}
 	if err := gitCmd(logger, command...); err != nil {
 		return err
 	}
